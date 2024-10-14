@@ -1,0 +1,60 @@
+# Copyright 2024 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+# This file configures Charmcraft.
+# See https://juju.is/docs/sdk/charmcraft-config for guidance.
+
+type: charm
+subordinate: true
+name: consul-client
+
+title: Consul client operator
+summary: |
+  Consul operator to run consul agent in client mode on hosts or VMs.
+description: |
+  Charm based Consul operator to deploy and manage consul agents in client mode.
+  Integrate with consul-k8s to join remote consul cluster.
+
+parts:
+  charm:
+    charm-binary-python-packages:
+      - pydantic
+
+base: ubuntu@22.04
+platforms:
+  amd64:
+    build-on: amd64
+    build-for: amd64
+
+extra-bindings:
+  # Consul clients bind to this space.
+  consul:
+
+requires:
+  consul-cluster:
+    interface: consul-cluster
+  juju-info:
+    interface: juju-info
+    scope: container
+
+links:
+  issues:
+  - https://github.com/canonical/consul-client-operator/issues
+  source:
+  - https://github.com/canonical/consul-client-operator
+  website:
+  - https://charmhub.io/consul-client
+
+config:
+  options:
+    snap-channel:
+      description: |
+        consul-client snap channel version to install
+      default: "latest/edge"
+      type: string
+    serf-lan-port:
+      description: |
+        Serf lan port number to be used.
+      type: int
+      default: 8301
+
