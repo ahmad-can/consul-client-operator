@@ -18,6 +18,7 @@ jobs:
     with:
       provider: lxd
       charmcraft-channel: 3.x/stable
+      charm-path: .
   release-charm:
     name: Release Charm and Libraries
     needs:
