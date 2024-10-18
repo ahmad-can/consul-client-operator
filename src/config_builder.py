@@ -4,9 +4,9 @@
 
 """Config builder for Consul."""
 
-import socket
-
 from pydantic import BaseModel, Field
+
+from utils import get_hostname
 
 
 class Ports(BaseModel):
@@ -50,7 +50,7 @@ class ConsulConfigBuilder:
         return {
             "bind_addr": self.bind_address,
             "datacenter": self.datacenter,
-            "node_name": socket.gethostname(),
+            "node_name": get_hostname(),
             "ports": {
                 "dns": self.ports.dns,
                 "http": self.ports.http,
