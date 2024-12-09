@@ -27,8 +27,8 @@ async def test_build_and_deploy(ops_test: OpsTest):
 
     # Deploy the charm and wait for active/idle status
     await ops_test.model.deploy(
-        PRINCIPAL_CHARM, application_name=PRINCIPAL_CHARM, base="ubuntu@22.04"
+        PRINCIPAL_CHARM, application_name=PRINCIPAL_CHARM, base="ubuntu@24.04"
     )
-    await ops_test.model.deploy(charm, application_name=APP_NAME, base="ubuntu@22.04", num_units=0)
+    await ops_test.model.deploy(charm, application_name=APP_NAME, base="ubuntu@24.04", num_units=0)
     await ops_test.model.integrate(APP_NAME, PRINCIPAL_CHARM)
     await ops_test.model.wait_for_idle(apps=[APP_NAME], status="blocked", timeout=1000)
