@@ -4,9 +4,15 @@
 
 """Config builder for Consul."""
 
+import logging
+import shutil
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 from utils import get_hostname
+
+logger = logging.getLogger(__name__)
 
 
 class Ports(BaseModel):
@@ -33,13 +39,19 @@ class ConsulConfigBuilder:
         self,
         bind_address: str | None,
         datacenter: str,
+        tcp_check: bool,
+        snap_name: str,
         consul_servers: list[str],
         ports: Ports,
+        unix_socket_filepath: str | None = None,
     ):
         self.bind_address = bind_address or "0.0.0.0"
         self.datacenter = datacenter
+        self.tcp_check = tcp_check
+        self.snap_name = snap_name
         self.consul_servers = consul_servers
         self.ports = ports
+        self.unix_socket_filepath = unix_socket_filepath
 
     def build(self) -> dict:
         """Build consul client config file.
@@ -47,7 +59,7 @@ class ConsulConfigBuilder:
         Service mesh, UI, DNS, gRPC, Serf WAN are not supported
         and disabled.
         """
-        return {
+        config = {
             "bind_addr": self.bind_address,
             "datacenter": self.datacenter,
             "node_name": get_hostname(),
@@ -63,3 +75,42 @@ class ConsulConfigBuilder:
             },
             "retry_join": self.consul_servers,
         }
+
+        if self.tcp_check and self.unix_socket_filepath:
+            self._write_tcp_check_script()
+            config["enable_script_checks"] = True
+
+            args = ["python3", str(self.consul_tcp_check), *self.consul_servers]
+            args.extend(["--socket-path", self.unix_socket_filepath])
+
+            config["services"] = [
+                {
+                    "name": "tcp-health-check",
+                    "check": {
+                        "id": "tcp-check",
+                        "name": "TCP Health Check",
+                        "args": args,
+                        "interval": "10s",
+                        "timeout": "5s",
+                    },
+                }
+            ]
+        return config
+
+    def _write_tcp_check_script(self):
+        """Copy the TCP health check Python script to the data directory."""
+        tcp_check_script_path = Path(__file__).parent / "tcp_health_check.py"
+        destination_path = self.consul_tcp_check
+
+        if not destination_path.exists():
+            try:
+                shutil.copy(tcp_check_script_path, destination_path)
+                logger.info(f"TCP health check script copied to {destination_path}")
+            except Exception as e:
+                logger.error(f"Failed to copy TCP health check script: {e}")
+                raise
+
+    @property
+    def consul_tcp_check(self) -> Path:
+        """Return the Consul TCP check script path."""
+        return Path(f"/var/snap/{self.snap_name}/common/consul/data/tcp_health_check.py")

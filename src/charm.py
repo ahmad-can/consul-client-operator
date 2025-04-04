@@ -14,10 +14,12 @@ import hashlib
 import json
 import logging
 import re
+import subprocess
 import typing
 from pathlib import Path
 
 import charms.operator_libs_linux.v2.snap as snap
+from charms.consul_client.v0.consul_notify import ConsulNotifyProvider
 from charms.consul_k8s.v0.consul_cluster import ConsulEndpointsRequirer
 from ops import main
 from ops.charm import CharmBase
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 CONSUL_SNAP_NAME = "consul-client"
 CONSUL_EXTRA_BINDING = "consul"
+CONSUL_SOCKET_INTERFACE = "consul-socket"
 SNAP_INSTANCE_KEY_REGEX_PATTERN = r"^[a-z0-9]{1,10}$"
 
 
@@ -47,6 +50,10 @@ class ConsulCharm(CharmBase):
 
         self.ports: Ports = self.get_consul_ports()
         self.consul = ConsulEndpointsRequirer(charm=self)
+        self.consul_notify = ConsulNotifyProvider(charm=self)
+
+        self.notify_snap_name: str | None = None
+        self.unix_socket_filepath: str | None = None
 
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.start, self._on_start)
@@ -57,6 +64,8 @@ class ConsulCharm(CharmBase):
         self.framework.observe(
             self.consul.on.endpoints_changed, self._on_consul_cluster_endpoints_changed
         )
+        self.framework.observe(self.consul_notify.on.socket_available, self._on_socket_available)
+        self.framework.observe(self.consul_notify.on.socket_gone, self._on_socket_gone)
 
     def get_consul_ports(self) -> Ports:
         """Return consul ports with supported values."""
@@ -91,6 +100,9 @@ class ConsulCharm(CharmBase):
     def _on_remove(self, _) -> None:
         self.unit.status = MaintenanceStatus(f"Uninstalling {self.snap_name} snap")
         try:
+            self._disconnect_snap_interface(
+                self.snap_name, self.notify_snap_name, CONSUL_SOCKET_INTERFACE
+            )
             self.snap.ensure(state=snap.SnapState.Absent)
             logging.debug(f"Unininstalling snap {self.snap_name}")
         except snap.SnapError as e:
@@ -106,6 +118,26 @@ class ConsulCharm(CharmBase):
         self._configure()
 
     def _on_consul_cluster_endpoints_changed(self, _):
+        self._configure()
+
+    def _on_socket_available(self, _):
+        if self.consul_notify.is_ready:
+            self.notify_snap_name = self.consul_notify.snap_name
+            self.unix_socket_filepath = self.consul_notify.unix_socket_filepath
+            logger.info(
+                f"Socket information available for sending NIC down alert: snap={self.notify_snap_name}, socket={self.unix_socket_filepath}"
+            )
+
+            self._connect_snap_interface(
+                self.snap_name, self.notify_snap_name, CONSUL_SOCKET_INTERFACE
+            )
+
+            self._configure()
+
+    def _on_socket_gone(self, _):
+        self.unix_socket_filepath = None
+        logger.info("Socket information gone, disabling TCP health check")
+
         self._configure()
 
     def _update_status(self, status):
@@ -141,11 +173,16 @@ class ConsulCharm(CharmBase):
     def _update_consul_config(self) -> bool:
         """Update consul client config."""
         if self.consul.datacenter and self.consul.external_gossip_endpoints:
+            enable_tcp_check = self.consul_notify.is_ready
+
             constructed_consul_config = ConsulConfigBuilder(
                 self.bind_address,
                 self.consul.datacenter,
+                enable_tcp_check,
+                self.snap_name,
                 self.consul.external_gossip_endpoints,
                 self.ports,
+                self.unix_socket_filepath,
             ).build()
         else:
             logger.debug("Waiting for consul server address from consul-cluster relation")
@@ -164,7 +201,37 @@ class ConsulCharm(CharmBase):
             self.consul_config, json.dumps(constructed_consul_config, indent=2)
         )
         logger.info("Consul configuration file updated.")
+
         return True
+
+    def _connect_snap_interface(
+        self, plug_snap: str, slot_snap: str | None, interface: str
+    ) -> None:
+        """Connect a snap interface between plug and slot snaps using snap library."""
+        try:
+            snap_cache = snap.SnapCache()
+            snap_obj = snap_cache[plug_snap]
+
+            snap_obj.connect(interface, service=slot_snap)
+            logger.info(
+                f"Successfully connected snap interfaces: {plug_snap}:{interface} -> {slot_snap}:{interface}"
+            )
+        except (snap.SnapError, snap.SnapNotFoundError) as e:
+            logger.warning(f"Failed to connect snap interfaces: {e}")
+
+    def _disconnect_snap_interface(
+        self, plug_snap: str, slot_snap: str | None, interface: str
+    ) -> None:
+        """Disconnect a snap interface between plug and slot snaps."""
+        plug = f"{plug_snap}:{interface}"
+        slot = f"{slot_snap}:{interface}"
+        cmd = ["snap", "disconnect", plug, slot]
+
+        try:
+            _ = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"Successfully disconnected snap interfaces: {plug} -X- {slot}")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to disconnect snap interfaces: {e.stderr}")
 
     def _ensure_snap_present(self) -> bool:
         """Install snap if it is not already present.
@@ -176,11 +243,16 @@ class ConsulCharm(CharmBase):
         try:
             if not self.snap.present:
                 self.snap.ensure(snap.SnapState.Latest, channel=channel)
+                # Connect snap interfaces only after the snap is installed.
+                # This avoids redundant connect calls when the snap is already present,
+                # reducing unnecessary operations on every config change.
+                self._connect_snap_interface(
+                    self.snap_name, self.notify_snap_name, CONSUL_SOCKET_INTERFACE
+                )
         except snap.SnapError as e:
             logger.info(f"Exception occurred while installing snap {self.snap_name}: {str(e)}")
             self._update_status(BlockedStatus(f"Failed to install snap {self.snap_name}"))
             return False
-
         return True
 
     def _read_configuration(self, filepath: Path):
@@ -235,6 +307,11 @@ class ConsulCharm(CharmBase):
     def consul_config(self) -> Path:
         """Return the consul config path."""
         return Path(f"/var/snap/{self.snap_name}/common/consul/config/client.json")
+
+    @property
+    def consul_tcp_check(self) -> Path:
+        """Return the path to the TCP health check script."""
+        return Path(f"/var/snap/{self.snap_name}/common/consul/data/tcp_health_check.py")
 
     @property
     def bind_address(self) -> str | None:
