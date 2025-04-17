@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import subprocess
+import typing
 from pathlib import Path
 
 import charms.operator_libs_linux.v2.snap as snap
@@ -229,7 +230,7 @@ class ConsulCharm(CharmBase):
             f.write(text)
 
     @property
-    def snap(self):
+    def snap(self) -> snap.Snap:
         """Return the snap object for the Consul snap."""
         # This is handled in a property to avoid calls to snapd until they're necessary.
         _snap_cache = snap.SnapCache()
@@ -247,6 +248,8 @@ class ConsulCharm(CharmBase):
 
             name = name_key[0]
             info = _snap_cache._snap_client.get_snap_information(name)
+            info = typing.cast(snap._SnapDict, info)
+
             _snap_cache._snap_map[self.snap_name] = snap.Snap(
                 name=self.snap_name,
                 state=snap.SnapState.Available,
@@ -257,7 +260,11 @@ class ConsulCharm(CharmBase):
             )
             # Setting snapd experimental parallel instances config to true
             snap._system_set("experimental.parallel-instances", "true")
-            return _snap_cache._snap_map[self.snap_name]
+            _s = _snap_cache._snap_map[self.snap_name]
+            if _s is None:
+                raise snap.SnapError("No snap exists in Snap cache") from None
+
+            return _s
 
     @property
     def consul_config(self) -> Path:
