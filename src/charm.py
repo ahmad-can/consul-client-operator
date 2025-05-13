@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import re
+import subprocess
 import typing
 from pathlib import Path
 
@@ -46,6 +47,9 @@ class ConsulCharm(CharmBase):
         logger.info(f"consul snap name is aliased as {self.snap_name}")
 
         self.ports: Ports = self.get_consul_ports()
+        self.enable_tcp_health_check: bool = (
+            str(self.config.get("enable-tcp-check")).lower() == "true"
+        )
         self.consul = ConsulEndpointsRequirer(charm=self)
 
         self.framework.observe(self.on.install, self._on_install)
@@ -91,6 +95,9 @@ class ConsulCharm(CharmBase):
     def _on_remove(self, _) -> None:
         self.unit.status = MaintenanceStatus(f"Uninstalling {self.snap_name} snap")
         try:
+            self._disconnect_snap_interface(
+                self.snap_name, "snap-openstack-hypervisor", "consul-socket"
+            )
             self.snap.ensure(state=snap.SnapState.Absent)
             logging.debug(f"Unininstalling snap {self.snap_name}")
         except snap.SnapError as e:
@@ -144,6 +151,8 @@ class ConsulCharm(CharmBase):
             constructed_consul_config = ConsulConfigBuilder(
                 self.bind_address,
                 self.consul.datacenter,
+                self.enable_tcp_health_check,
+                self.snap_name,
                 self.consul.external_gossip_endpoints,
                 self.ports,
             ).build()
@@ -166,6 +175,32 @@ class ConsulCharm(CharmBase):
         logger.info("Consul configuration file updated.")
         return True
 
+    @staticmethod
+    def _connect_snap_interface(plug_snap: str, slot_snap: str, interface: str) -> None:
+        """Connect a snap interface between plug and slot snaps."""
+        plug = f"{plug_snap}:{interface}"
+        slot = f"{slot_snap}:{interface}"
+        cmd = ["snap", "connect", plug, slot]
+
+        try:
+            _ = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"Successfully connected snap interfaces: {plug} -> {slot}")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to connect snap interfaces: {e.stderr}")
+
+    @staticmethod
+    def _disconnect_snap_interface(plug_snap: str, slot_snap: str, interface: str) -> None:
+        """Disconnect a snap interface between plug and slot snaps."""
+        plug = f"{plug_snap}:{interface}"
+        slot = f"{slot_snap}:{interface}"
+        cmd = ["snap", "disconnect", plug, slot]
+
+        try:
+            _ = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"Successfully disconnected snap interfaces: {plug} -X- {slot}")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to disconnect snap interfaces: {e.stderr}")
+
     def _ensure_snap_present(self) -> bool:
         """Install snap if it is not already present.
 
@@ -180,7 +215,7 @@ class ConsulCharm(CharmBase):
             logger.info(f"Exception occurred while installing snap {self.snap_name}: {str(e)}")
             self._update_status(BlockedStatus(f"Failed to install snap {self.snap_name}"))
             return False
-
+        self._connect_snap_interface(self.snap_name, "snap-openstack-hypervisor", "consul-socket")
         return True
 
     def _read_configuration(self, filepath: Path):
@@ -235,6 +270,11 @@ class ConsulCharm(CharmBase):
     def consul_config(self) -> Path:
         """Return the consul config path."""
         return Path(f"/var/snap/{self.snap_name}/common/consul/config/client.json")
+
+    @property
+    def consul_tcp_check(self) -> Path:
+        """Return the consul config path."""
+        return Path(f"/var/snap/{self.snap_name}/common/consul/data/tcp_check.py")
 
     @property
     def bind_address(self) -> str | None:
