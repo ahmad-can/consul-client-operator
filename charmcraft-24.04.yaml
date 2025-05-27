@@ -37,6 +37,10 @@ requires:
     interface: juju-info
     scope: container
 
+provides:
+  consul-notify:
+    interface: consul-notify
+
 links:
   issues:
   - https://github.com/canonical/consul-client-operator/issues
@@ -57,4 +61,3 @@ config:
         Serf lan port number to be used.
       type: int
       default: 8301
-
