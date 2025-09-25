@@ -61,3 +61,4 @@ config:
         Serf lan port number to be used.
       type: int
       default: 8301
+
