@@ -16,6 +16,8 @@ jobs:
     uses: canonical/observability/.github/workflows/_charm-quality-checks.yaml@main
     secrets: inherit
     with:
+      juju-channel: 3.6/stable
+      parallelize-integration: true
       provider: lxd
       charmcraft-channel: 3.x/stable
       charm-path: .
