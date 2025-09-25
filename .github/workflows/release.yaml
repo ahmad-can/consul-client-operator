@@ -19,18 +19,18 @@ jobs:
       juju-channel: 3.6/stable
       parallelize-integration: true
       automatically-retry-hooks: true
-      provider: lxd
+      provider: machine
       charmcraft-channel: 3.x/stable
       charm-path: .
   release-charm:
     name: Release Charm and Libraries
     needs:
       - quality-checks
-    uses: canonical/observability/.github/workflows/_charm-release.yaml@main
+    uses: canonical/observability/.github/workflows/charm-release.yaml@main
     secrets: inherit
     with:
-      release-channel: "1.23/edge"
-      charmcraft-channel: "3.x/stable"
+      provider: machine
+      default-track: "1.19"
   release-libs:
     name: Release any bumped charm library
     needs:
