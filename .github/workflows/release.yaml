@@ -19,7 +19,7 @@ jobs:
       juju-channel: 3.6/stable
       parallelize-integration: true
       automatically-retry-hooks: true
-      provider: lxd
+      provider: machine
       charmcraft-channel: 3.x/stable
       charm-path: .
   release-charm:
