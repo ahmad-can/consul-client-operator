@@ -18,6 +18,7 @@ jobs:
     with:
       juju-channel: 3.6/stable
       parallelize-integration: true
+      automatically-retry-hooks: true
       provider: lxd
       charmcraft-channel: 3.x/stable
       charm-path: .
