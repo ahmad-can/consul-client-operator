@@ -158,7 +158,8 @@ class TestTcpCheck:
 
         mock_create_connection.side_effect = side_effect
 
-        tcp_check(servers, "data/socket.sock")
+        # Use monitoring_samples=1 for immediate alert
+        tcp_check(servers, "data/socket.sock", monitoring_samples=1)
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
@@ -173,7 +174,8 @@ class TestTcpCheck:
         servers = ["10.0.0.1:8301", "10.0.0.2:8301"]
         mock_create_connection.side_effect = socket.error("Connection refused")
 
-        tcp_check(servers, "data/socket.sock")
+        # Use monitoring_samples=1 for immediate alert
+        tcp_check(servers, "data/socket.sock", monitoring_samples=1)
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
@@ -187,7 +189,8 @@ class TestTcpCheck:
         servers = ["10.0.0.1:8301"]
         mock_create_connection.side_effect = socket.timeout("Timed out")
 
-        tcp_check(servers, "data/socket.sock")
+        # Use monitoring_samples=1 for immediate alert
+        tcp_check(servers, "data/socket.sock", monitoring_samples=1)
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
@@ -199,7 +202,8 @@ class TestTcpCheck:
         servers = ["10.0.0.1:8301"]
         mock_create_connection.side_effect = socket.error("Connection refused")
 
-        tcp_check(servers, None)
+        # Use monitoring_samples=1 to reach threshold immediately
+        tcp_check(servers, None, monitoring_samples=1)
 
         # Verify error message about missing socket path
         assert "Cannot send alert: socket_path is required but was not provided" in caplog.text
@@ -237,7 +241,8 @@ class TestTcpCheck:
 
         mock_create_connection.side_effect = side_effect
 
-        tcp_check(servers, "data/socket.sock")
+        # Use monitoring_samples=1 for immediate alert
+        tcp_check(servers, "data/socket.sock", monitoring_samples=1)
 
         # Verify alert was sent (because at least one failed)
         mock_send_alert.assert_called_once_with("data/socket.sock")

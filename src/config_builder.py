@@ -45,6 +45,8 @@ class ConsulConfigBuilder:
         ports: Ports,
         unix_socket_filepath: str | None = None,
         healthcheck_endpoints: list[str] | None = None,
+        monitoring_interval: str = "10s",
+        monitoring_samples: int = 3,
     ):
         self.bind_address = bind_address or "0.0.0.0"
         self.datacenter = datacenter
@@ -54,6 +56,8 @@ class ConsulConfigBuilder:
         self.ports = ports
         self.unix_socket_filepath = unix_socket_filepath
         self.healthcheck_endpoints = healthcheck_endpoints
+        self.monitoring_interval = monitoring_interval
+        self.monitoring_samples = monitoring_samples
 
     def build(self) -> dict:
         """Build consul client config file.
@@ -87,6 +91,7 @@ class ConsulConfigBuilder:
             else:
                 args = ["python3", str(self.consul_health_check), *self.consul_servers]
             args.extend(["--socket-path", self.unix_socket_filepath])
+            args.extend(["--monitoring-samples", str(self.monitoring_samples)])
 
             config["services"] = [
                 {
@@ -95,7 +100,7 @@ class ConsulConfigBuilder:
                         "id": "tcp-check",
                         "name": "TCP Health Check",
                         "args": args,
-                        "interval": "10s",
+                        "interval": self.monitoring_interval,
                         "timeout": "5s",
                     },
                 }

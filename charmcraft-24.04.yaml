@@ -66,3 +66,13 @@ config:
         Enable Health check in consul config.
       type: boolean
       default: true
+    monitoring-interval:
+      description: |
+        Interval between health check executions (e.g., "10s", "30s", "1m").
+      type: string
+      default: "10s"
+    monitoring-samples:
+      description: |
+        Number of consecutive failed health checks before sending nic-down alert.
+      type: int
+      default: 3

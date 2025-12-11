@@ -171,6 +171,9 @@ class ConsulCharm(CharmBase):
                 bool(self.config.get("enable-health-check", False)) and self.consul_notify.is_ready
             )
 
+            monitoring_interval = str(self.config.get("monitoring-interval", "10s"))
+            monitoring_samples = int(self.config.get("monitoring-samples", 3))
+
             constructed_consul_config = ConsulConfigBuilder(
                 self.bind_address,
                 self.consul.datacenter,
@@ -180,6 +183,8 @@ class ConsulCharm(CharmBase):
                 self.ports,
                 self.consul_notify.unix_socket_filepath,
                 self.consul.external_gossip_healthcheck_endpoints,
+                monitoring_interval,
+                monitoring_samples,
             ).build()
         else:
             logger.debug("Waiting for consul server address from consul-cluster relation")
