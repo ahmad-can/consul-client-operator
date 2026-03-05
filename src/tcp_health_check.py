@@ -154,7 +154,22 @@ def tcp_check(
             logging.info("✅ All servers reachable. No alert triggered.")
 
 
+def _configure_logging():
+    """Configure logging so output is visible when Consul runs this script as a subprocess."""
+    fmt = "%(levelname)s: %(message)s"
+    logging.basicConfig(level=logging.DEBUG, format=fmt, stream=sys.stderr, force=True)
+    snap_data = os.environ.get("SNAP_DATA")
+    if snap_data:
+        handler = logging.FileHandler(
+            os.path.join(snap_data, "tcp_health_check.log"), encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter(fmt))
+        logging.getLogger().addHandler(handler)
+
+
 if __name__ == "__main__":
+    _configure_logging()
+
     parser = argparse.ArgumentParser(description="TCP health check for Consul servers")
     parser.add_argument("servers", nargs="+", help="List of servers to check in format host:port")
     parser.add_argument("--socket-path", "-s", help="Path to the Unix socket")
