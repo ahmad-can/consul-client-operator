@@ -88,7 +88,9 @@ def _configure_logging():
     logging.basicConfig(level=logging.DEBUG, format=fmt, stream=sys.stderr, force=True)
     snap_data = os.environ.get("SNAP_DATA")
     if snap_data:
-        handler = logging.FileHandler(os.path.join(snap_data, "tcp_health_check.log"), encoding="utf-8")
+        handler = logging.FileHandler(
+            os.path.join(snap_data, "tcp_health_check.log"), encoding="utf-8"
+        )
         handler.setFormatter(logging.Formatter(fmt))
         logging.getLogger().addHandler(handler)
 
