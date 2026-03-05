@@ -167,19 +167,24 @@ class ConsulCharm(CharmBase):
     def _update_consul_config(self) -> bool:
         """Update consul client config."""
         if self.consul.datacenter and self.consul.external_gossip_endpoints:
-            enable_tcp_check = (
-                bool(self.config.get("enable-tcp-health-check", False))
-                and self.consul_notify.is_ready
+            enable_health_check = (
+                bool(self.config.get("enable-health-check", False)) and self.consul_notify.is_ready
             )
+
+            monitoring_interval = str(self.config.get("monitoring-interval", "10s"))
+            monitoring_samples = int(self.config.get("monitoring-samples", 3))
 
             constructed_consul_config = ConsulConfigBuilder(
                 self.bind_address,
                 self.consul.datacenter,
-                enable_tcp_check,
+                enable_health_check,
                 self.snap_name,
                 self.consul.external_gossip_endpoints,
                 self.ports,
                 self.consul_notify.unix_socket_filepath,
+                self.consul.external_gossip_healthcheck_endpoints,
+                monitoring_interval,
+                monitoring_samples,
             ).build()
         else:
             logger.debug("Waiting for consul server address from consul-cluster relation")

@@ -77,7 +77,7 @@ LIBAPI = 0
 
 # Increment this PATCH version before using `charmcraft publish-lib` or reset
 # to 0 if you are raising the major API version
-LIBPATCH = 2
+LIBPATCH = 3
 
 DEFAULT_RELATION_NAME = "consul-cluster"
 
@@ -101,8 +101,17 @@ class ConsulServiceProviderAppData(BaseModel):
     )
     # This field will be the ingress endpoint. Ingress is not supported yet.
     external_http_endpoint: str | None = Field("Consul server http address for external users")
+    external_gossip_healthcheck_endpoints: list[str] | None = Field(  # pyright: ignore
+        default=None,
+        description="Consul server gossip healthcheck addresses for external consul agents",
+    )
 
-    @field_validator("internal_gossip_endpoints", "external_gossip_endpoints", mode="before")
+    @field_validator(
+        "internal_gossip_endpoints",
+        "external_gossip_endpoints",
+        "external_gossip_healthcheck_endpoints",
+        mode="before",
+    )
     @classmethod
     def convert_str_to_list_of_str(cls, v: str) -> list[str]:
         """Convert string field to list of str."""
@@ -222,6 +231,12 @@ class ConsulEndpointsRequirer(Object):
         data = self._get_app_databag_from_relation()
         return data.get("external_http_endpoint")
 
+    @property
+    def external_gossip_healthcheck_endpoints(self) -> list[str] | None:
+        """Return external gossip healthcheck endpoints from provider app data."""
+        data = self._get_app_databag_from_relation()
+        return data.get("external_gossip_healthcheck_endpoints")
+
 
 class ClusterEndpointsRequestEvent(RelationEvent):
     """Consul cluster endpoints request event."""
@@ -260,6 +275,7 @@ class ConsulServiceProvider(Object):
         external_gossip_endpoints: list[str] | None,
         internal_http_endpoint: str | None,
         external_http_endpoint: str | None,
+        external_gossip_healthcheck_endpoints: list[str] | None = None,
     ) -> None:
         """Set consul cluster endpoints on the relation.
 
@@ -276,6 +292,7 @@ class ConsulServiceProvider(Object):
                 external_gossip_endpoints=external_gossip_endpoints,
                 internal_http_endpoint=internal_http_endpoint,
                 external_http_endpoint=external_http_endpoint,
+                external_gossip_healthcheck_endpoints=external_gossip_healthcheck_endpoints,
             )
         except ValidationError as e:
             logger.info(f"Provider trying to set incorrect app data {str(e)}")
@@ -290,6 +307,9 @@ class ConsulServiceProvider(Object):
         _external_gossip_endpoints: str = json.dumps(databag.external_gossip_endpoints)
         _internal_http_endpoint: str = json.dumps(databag.internal_http_endpoint)
         _external_http_endpoint: str = json.dumps(external_http_endpoint)
+        _external_gossip_healthcheck_endpoints: str = json.dumps(
+            databag.external_gossip_healthcheck_endpoints
+        )
 
         if relation is None:
             logging.debug(
@@ -313,3 +333,6 @@ class ConsulServiceProvider(Object):
                 )
                 relation.data[self.charm.app]["internal_http_endpoint"] = _internal_http_endpoint
                 relation.data[self.charm.app]["external_http_endpoint"] = _external_http_endpoint
+                relation.data[self.charm.app]["external_gossip_healthcheck_endpoints"] = (
+                    _external_gossip_healthcheck_endpoints
+                )
