@@ -1117,3 +1117,32 @@ def test_on_upgrade(harness: Harness[ConsulCharm], snap, read_config, write_conf
 
     # Verify status is ActiveStatus after upgrade
     assert isinstance(harness.model.unit.status, ActiveStatus)
+
+
+def test_refresh_snap_action_success(harness: Harness[ConsulCharm], snap):
+    """Test refresh-snap action refreshes the snap and re-applies hold."""
+    harness.begin()
+
+    snap_instance = snap.SnapCache.return_value.__getitem__.return_value
+
+    output = harness.run_action("refresh-snap")
+
+    snap_instance.unhold.assert_called_once()
+    snap_instance.ensure.assert_called_once_with(
+        snap.SnapState.Latest,
+        channel=harness.model.config["snap-channel"],
+    )
+    snap_instance.hold.assert_called_once()
+    assert "result" in output.results
+
+
+def test_ensure_snap_present_holds_snap(harness: Harness[ConsulCharm], snap):
+    """Test that _ensure_snap_present holds the snap after install."""
+    snap_instance = snap.SnapCache.return_value.__getitem__.return_value
+    snap_instance.present = False
+
+    with patch.object(ConsulCharm, "_connect_snap_interface"):
+        harness.begin()
+        harness.charm._ensure_snap_present()
+
+    snap_instance.hold.assert_called()

@@ -32,3 +32,20 @@ async def test_build_and_deploy(ops_test: OpsTest):
     await ops_test.model.deploy(charm, application_name=APP_NAME, base="ubuntu@24.04", num_units=0)
     await ops_test.model.integrate(APP_NAME, PRINCIPAL_CHARM)
     await ops_test.model.wait_for_idle(apps=[APP_NAME], status="blocked", timeout=1000)
+
+
+@pytest.mark.abort_on_fail
+async def test_refresh_snap_action(ops_test: OpsTest):
+    """Test the refresh-snap action runs successfully on a deployed unit."""
+    app = ops_test.model.applications[APP_NAME]
+    assert app is not None and len(app.units) > 0, "No units found for consul-client"
+
+    unit = app.units[0]
+    action = await unit.run_action("refresh-snap")
+    await action.wait()
+
+    assert action.status == "completed", (
+        f"refresh-snap action failed with status '{action.status}': {action.results}"
+    )
+    assert "result" in action.results
+    assert "refreshed successfully" in action.results["result"]

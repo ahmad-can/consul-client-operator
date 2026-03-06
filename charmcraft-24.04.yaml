@@ -49,6 +49,13 @@ links:
   website:
   - https://charmhub.io/consul-client
 
+actions:
+  refresh-snap:
+    description: |
+      Refresh the consul-client snap to the latest available revision on the
+      configured channel. The snap is held after installation to prevent automatic
+      refreshes; use this action to apply updates explicitly.
+
 config:
   options:
     snap-channel:
