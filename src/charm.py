@@ -214,7 +214,7 @@ class ConsulCharm(CharmBase):
             snap_cache = snap.SnapCache()
             snap_obj = snap_cache[plug_snap]
 
-            snap_obj.connect(interface, service=slot_snap)
+            snap_obj.connect(interface, service=slot_snap, slot=interface)
             logger.info(
                 f"Successfully connected snap interfaces: {plug_snap}:{interface} -> {slot_snap}:{interface}"
             )

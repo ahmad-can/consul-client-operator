@@ -982,6 +982,16 @@ def test_connect_snap_interface_snap_not_found(harness: Harness[ConsulCharm], sn
     harness.charm._connect_snap_interface("plug-snap", "slot-snap", "test-interface")
 
 
+def test_connect_snap_interface_calls_connect_with_service_and_slot(harness: Harness[ConsulCharm], snap):
+    """Test _connect_snap_interface calls snap connect with service and slot for full command."""
+    connect_mock = snap.SnapCache.return_value.__getitem__.return_value.connect
+
+    harness.begin()
+    harness.charm._connect_snap_interface("plug-snap", "slot-snap", "test-interface")
+
+    connect_mock.assert_called_once_with("test-interface", service="slot-snap", slot="test-interface")
+
+
 def test_disconnect_snap_interface_success(harness: Harness[ConsulCharm]):
     """Test _disconnect_snap_interface successful disconnection."""
     with patch("subprocess.run") as run_mock:
