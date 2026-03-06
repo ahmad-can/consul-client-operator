@@ -22,7 +22,7 @@ import charms.operator_libs_linux.v2.snap as snap
 from charms.consul_client.v0.consul_notify import ConsulNotifyProvider
 from charms.consul_k8s.v0.consul_cluster import ConsulEndpointsRequirer
 from ops import main
-from ops.charm import CharmBase
+from ops.charm import ActionEvent, CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
 
 from config_builder import ConsulConfigBuilder, Ports
@@ -63,6 +63,7 @@ class ConsulCharm(CharmBase):
         )
         self.framework.observe(self.consul_notify.on.socket_available, self._on_socket_available)
         self.framework.observe(self.consul_notify.on.socket_gone, self._on_socket_gone)
+        self.framework.observe(self.on.refresh_snap_action, self._on_refresh_snap_action)
 
     def get_consul_ports(self) -> Ports:
         """Return consul ports with supported values."""
@@ -251,11 +252,23 @@ class ConsulCharm(CharmBase):
                 self._connect_snap_interface(
                     self.snap_name, self.consul_notify.snap_name, CONSUL_SOCKET_INTERFACE
                 )
+            self.snap.hold()
         except snap.SnapError as e:
             logger.info(f"Exception occurred while installing snap {self.snap_name}: {str(e)}")
             self._update_status(BlockedStatus(f"Failed to install snap {self.snap_name}"))
             return False
         return True
+
+    def _on_refresh_snap_action(self, event: ActionEvent) -> None:
+        """Refresh consul-client snap to the latest revision on the configured channel."""
+        channel: str = self.model.config.get("snap-channel")  # pyright: ignore
+        try:
+            self.snap.unhold()
+            self.snap.ensure(snap.SnapState.Latest, channel=channel)
+            self.snap.hold()
+            event.set_results({"result": f"Snap {self.snap_name} refreshed successfully"})
+        except snap.SnapError as e:
+            event.fail(f"Failed to refresh snap {self.snap_name}: {e}")
 
     def _read_configuration(self, filepath: Path):
         """Read contents of configuration file."""
