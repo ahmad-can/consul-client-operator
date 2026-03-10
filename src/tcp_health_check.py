@@ -8,6 +8,7 @@ import os
 import socket
 import sys
 import time
+from logging.handlers import TimedRotatingFileHandler
 
 PROTOCOL_VERSION = "1.0"
 
@@ -117,10 +118,10 @@ def tcp_check(
         port = int(port)
 
         try:
-            with socket.create_connection((host, port), timeout=5):
-                logging.info(f"TCP check successful for {server}")
+            with socket.create_connection((host, port), timeout=2):
+                logging.info(f"Network is reachable on {server}")
         except (socket.timeout, socket.error) as e:
-            logging.warning(f"TCP check failed for {server}: {e}")
+            logging.warning(f"Network is not reachable on {server}: {e}")
             nic_down = True
 
     # Load current failure count from state file
@@ -148,22 +149,25 @@ def tcp_check(
     else:
         # Reset failure count on success
         if failure_count > 0:
-            logging.info("✅ All servers reachable. Resetting failure count.")
+            logging.info("Network is reachable. Resetting failure count.")
             write_failure_count(state_file, 0)
-        else:
-            logging.info("✅ All servers reachable. No alert triggered.")
 
 
 def _configure_logging():
     """Configure logging so output is visible when Consul runs this script as a subprocess."""
-    fmt = "%(levelname)s: %(message)s"
-    logging.basicConfig(level=logging.DEBUG, format=fmt, stream=sys.stderr, force=True)
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+    formatter = logging.Formatter(fmt, datefmt=datefmt)
+    logging.basicConfig(
+        level=logging.DEBUG, format=fmt, datefmt=datefmt, stream=sys.stderr, force=True
+    )
     snap_data = os.environ.get("SNAP_DATA")
     if snap_data:
-        handler = logging.FileHandler(
-            os.path.join(snap_data, "tcp_health_check.log"), encoding="utf-8"
+        log_path = os.path.join(snap_data, "tcp_health_check.log")
+        handler = TimedRotatingFileHandler(
+            log_path, when="midnight", backupCount=3, encoding="utf-8"
         )
-        handler.setFormatter(logging.Formatter(fmt))
+        handler.setFormatter(formatter)
         logging.getLogger().addHandler(handler)
 
 

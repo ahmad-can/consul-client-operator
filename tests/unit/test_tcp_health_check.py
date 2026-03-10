@@ -131,12 +131,12 @@ class TestTcpCheck:
             if call[0]  # Only calls with positional arguments
         ]
         assert len(connection_calls) == 3
-        assert connection_calls[0] == call(("10.0.0.1", 8301), timeout=5)
-        assert connection_calls[1] == call(("10.0.0.2", 8301), timeout=5)
-        assert connection_calls[2] == call(("10.0.0.3", 8301), timeout=5)
+        assert connection_calls[0] == call(("10.0.0.1", 8301), timeout=2)
+        assert connection_calls[1] == call(("10.0.0.2", 8301), timeout=2)
+        assert connection_calls[2] == call(("10.0.0.3", 8301), timeout=2)
 
         # Verify success message
-        assert "✅ All servers reachable. No alert triggered." in caplog.text
+        assert "Network is reachable on" in caplog.text
 
     @patch("tcp_health_check.send_nic_down_alert")
     @patch("tcp_health_check.socket.create_connection")
@@ -163,7 +163,7 @@ class TestTcpCheck:
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
-        assert "TCP check failed for 10.0.0.2:8301" in caplog.text
+        assert "Network is not reachable on 10.0.0.2:8301" in caplog.text
 
     @patch("tcp_health_check.send_nic_down_alert")
     @patch("tcp_health_check.socket.create_connection")
@@ -179,8 +179,8 @@ class TestTcpCheck:
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
-        assert "TCP check failed for 10.0.0.1:8301" in caplog.text
-        assert "TCP check failed for 10.0.0.2:8301" in caplog.text
+        assert "Network is not reachable on 10.0.0.1:8301" in caplog.text
+        assert "Network is not reachable on 10.0.0.2:8301" in caplog.text
 
     @patch("tcp_health_check.send_nic_down_alert")
     @patch("tcp_health_check.socket.create_connection")
@@ -194,7 +194,7 @@ class TestTcpCheck:
 
         # Verify alert was sent
         mock_send_alert.assert_called_once_with("data/socket.sock")
-        assert "TCP check failed for 10.0.0.1:8301" in caplog.text
+        assert "Network is not reachable on 10.0.0.1:8301" in caplog.text
 
     @patch("tcp_health_check.socket.create_connection")
     def test_tcp_check_no_socket_path_on_failure(self, mock_create_connection, caplog):
@@ -218,8 +218,8 @@ class TestTcpCheck:
         tcp_check(servers, "data/socket.sock")
 
         # Verify server was checked
-        mock_create_connection.assert_called_once_with(("192.168.1.10", 9301), timeout=5)
-        assert "TCP check successful for 192.168.1.10:9301" in caplog.text
+        mock_create_connection.assert_called_once_with(("192.168.1.10", 9301), timeout=2)
+        assert "Network is reachable on 192.168.1.10:9301" in caplog.text
 
     @patch("tcp_health_check.send_nic_down_alert")
     @patch("tcp_health_check.socket.create_connection")
@@ -246,9 +246,9 @@ class TestTcpCheck:
 
         # Verify alert was sent (because at least one failed)
         mock_send_alert.assert_called_once_with("data/socket.sock")
-        assert "TCP check successful for 10.0.0.1:8301" in caplog.text
-        assert "TCP check failed for 10.0.0.2:8301" in caplog.text
-        assert "TCP check successful for 10.0.0.3:8301" in caplog.text
+        assert "Network is reachable on 10.0.0.1:8301" in caplog.text
+        assert "Network is not reachable on 10.0.0.2:8301" in caplog.text
+        assert "Network is reachable on 10.0.0.3:8301" in caplog.text
 
     @patch("tcp_health_check.socket.create_connection")
     def test_tcp_check_different_ports(self, mock_create_connection, caplog):
@@ -266,9 +266,9 @@ class TestTcpCheck:
             if call[0]  # Only calls with positional arguments
         ]
         assert len(connection_calls) == 3
-        assert connection_calls[0] == call(("10.0.0.1", 8301), timeout=5)
-        assert connection_calls[1] == call(("10.0.0.2", 9301), timeout=5)
-        assert connection_calls[2] == call(("10.0.0.3", 7301), timeout=5)
+        assert connection_calls[0] == call(("10.0.0.1", 8301), timeout=2)
+        assert connection_calls[1] == call(("10.0.0.2", 9301), timeout=2)
+        assert connection_calls[2] == call(("10.0.0.3", 7301), timeout=2)
 
     @patch("tcp_health_check.socket.create_connection")
     def test_tcp_check_ipv6_address(self, mock_create_connection, caplog):
