@@ -19,6 +19,7 @@ parts:
   charm:
     charm-binary-python-packages:
       - pydantic
+      - cryptography
 
 base: ubuntu@22.04
 platforms:
@@ -33,6 +34,8 @@ extra-bindings:
 requires:
   consul-cluster:
     interface: consul-cluster
+  certificates:
+    interface: tls-certificates
   juju-info:
     interface: juju-info
     scope: container

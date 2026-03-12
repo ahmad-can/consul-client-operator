@@ -21,9 +21,16 @@ from pathlib import Path
 import charms.operator_libs_linux.v2.snap as snap
 from charms.consul_client.v0.consul_notify import ConsulNotifyProvider
 from charms.consul_k8s.v0.consul_cluster import ConsulEndpointsRequirer
+from charms.tls_certificates_interface.v4.tls_certificates import (
+    CertificateAvailableEvent,
+    CertificateRequestAttributes,
+    ProviderCertificate,
+    PrivateKey,
+    TLSCertificatesRequiresV4,
+)
 from ops import main
 from ops.charm import CharmBase
-from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from config_builder import ConsulConfigBuilder, Ports
 
@@ -51,6 +58,17 @@ class ConsulCharm(CharmBase):
         self.ports: Ports = self.get_consul_ports()
         self.consul = ConsulEndpointsRequirer(charm=self)
         self.consul_notify = ConsulNotifyProvider(charm=self)
+        unit_common_name = self.model.unit.name.replace("/", "-")
+        self._certificate_request = CertificateRequestAttributes(
+            common_name=unit_common_name,
+            sans_dns={unit_common_name},
+            organization="consul",
+        )
+        self.certificates = TLSCertificatesRequiresV4(
+            charm=self,
+            relationship_name="certificates",
+            certificate_requests=[self._certificate_request],
+        )
 
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.start, self._on_start)
@@ -63,6 +81,9 @@ class ConsulCharm(CharmBase):
         )
         self.framework.observe(self.consul_notify.on.socket_available, self._on_socket_available)
         self.framework.observe(self.consul_notify.on.socket_gone, self._on_socket_gone)
+        self.framework.observe(
+            self.certificates.on.certificate_available, self._on_certificate_available
+        )
 
     def get_consul_ports(self) -> Ports:
         """Return consul ports with supported values."""
@@ -134,6 +155,18 @@ class ConsulCharm(CharmBase):
 
         self._configure()
 
+    def _on_certificate_available(self, _: CertificateAvailableEvent) -> None:
+        """Handle TLS certificate availability."""
+        provider_certificate, private_key = self.certificates.get_assigned_certificate(
+            self._certificate_request
+        )
+        if not provider_certificate or not private_key:
+            logger.debug("Certificate event triggered before assets ready")
+            return
+
+        self._write_tls_assets(provider_certificate, private_key)
+        self._configure()
+
     def _update_status(self, status):
         if self.unit.is_leader():
             self.app.status = status
@@ -162,6 +195,15 @@ class ConsulCharm(CharmBase):
             self._update_status(BlockedStatus("Integration consul-cluster missing"))
             return True
 
+        if not self.model.get_relation("certificates"):
+            logger.debug("Waiting for certificates relation to be ready")
+            self._update_status(BlockedStatus("Integration certificates missing"))
+            return True
+
+        if not self._tls_material_ready():
+            self._update_status(WaitingStatus("Waiting for TLS certificates"))
+            return True
+
         return False
 
     def _update_consul_config(self) -> bool:
@@ -172,6 +214,12 @@ class ConsulCharm(CharmBase):
                 and self.consul_notify.is_ready
             )
 
+            tls_paths = {
+                "ca_file": str(self.ca_cert_path),
+                "cert_file": str(self.client_cert_path),
+                "key_file": str(self.client_key_path),
+            }
+
             constructed_consul_config = ConsulConfigBuilder(
                 self.bind_address,
                 self.consul.datacenter,
@@ -180,6 +228,7 @@ class ConsulCharm(CharmBase):
                 self.consul.external_gossip_endpoints,
                 self.ports,
                 self.consul_notify.unix_socket_filepath,
+                tls_paths=tls_paths,
             ).build()
         else:
             logger.debug("Waiting for consul server address from consul-cluster relation")
@@ -322,6 +371,45 @@ class ConsulCharm(CharmBase):
             return None
 
         return str(address)
+
+    def _write_tls_assets(
+        self, provider_certificate: ProviderCertificate, private_key: PrivateKey
+    ) -> None:
+        """Write TLS assets into the snap directory."""
+        self.tls_cert_dir.mkdir(parents=True, exist_ok=True)
+        ca_chain = [str(provider_certificate.ca)]
+        ca_chain.extend(str(cert) for cert in provider_certificate.chain)
+
+        self.client_cert_path.write_text(str(provider_certificate.certificate))
+        self.client_key_path.write_text(str(private_key))
+        self.ca_cert_path.write_text("\n".join(ca_chain))
+        logger.info("Updated consul client TLS certificates")
+
+    def _tls_material_ready(self) -> bool:
+        """Return True when TLS materials are present on disk."""
+        required_files = [
+            self.client_cert_path,
+            self.client_key_path,
+            self.ca_cert_path,
+        ]
+        return all(path.exists() for path in required_files)
+
+    @property
+    def tls_cert_dir(self) -> Path:
+        """Return the directory storing TLS assets."""
+        return Path(f"/var/snap/{self.snap_name}/common/consul/config/certs")
+
+    @property
+    def client_cert_path(self) -> Path:
+        return self.tls_cert_dir / "client-cert.pem"
+
+    @property
+    def client_key_path(self) -> Path:
+        return self.tls_cert_dir / "client-key.pem"
+
+    @property
+    def ca_cert_path(self) -> Path:
+        return self.tls_cert_dir / "ca.pem"
 
 
 if __name__ == "__main__":  # pragma: nocover

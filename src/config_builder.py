@@ -44,6 +44,7 @@ class ConsulConfigBuilder:
         consul_servers: list[str],
         ports: Ports,
         unix_socket_filepath: str | None = None,
+        tls_paths: dict[str, str] | None = None,
     ):
         self.bind_address = bind_address or "0.0.0.0"
         self.datacenter = datacenter
@@ -52,6 +53,7 @@ class ConsulConfigBuilder:
         self.consul_servers = consul_servers
         self.ports = ports
         self.unix_socket_filepath = unix_socket_filepath
+        self.tls_paths = tls_paths
 
     def build(self) -> dict:
         """Build consul client config file.
@@ -74,6 +76,17 @@ class ConsulConfigBuilder:
                 "server": self.ports.server,
             },
             "retry_join": self.consul_servers,
+        }
+
+        if self.tls_paths:
+            config["tls"] = {
+                "defaults": {
+                    "verify_incoming": False,
+                    "verify_outgoing": True,
+                    "ca_file": self.tls_paths["ca_file"],
+                    "cert_file": self.tls_paths["cert_file"],
+                    "key_file": self.tls_paths["key_file"],
+                }
         }
 
         if self.tcp_check and self.unix_socket_filepath:
