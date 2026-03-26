@@ -11,6 +11,7 @@ from ops.model import ActiveStatus, BlockedStatus
 from ops.testing import Harness
 
 from charm import ConsulCharm
+from config_builder import ConsulConfigBuilder
 
 
 @pytest.fixture()
@@ -190,7 +191,10 @@ def test_consul_notify_socket_available(
     assert health_check_service["check"]["id"] == "tcp-check"
     assert health_check_service["check"]["name"] == "TCP Health Check"
     assert "--socket-path" in health_check_service["check"]["args"]
-    assert socket_path in health_check_service["check"]["args"]
+    assert (
+        f"{ConsulConfigBuilder.HYPERVISOR_SOCKET_PREFIX}/{socket_path}"
+        in health_check_service["check"]["args"]
+    )
 
 
 def test_consul_notify_socket_gone(
@@ -371,7 +375,10 @@ def test_socket_config_persists_across_events(
     assert len(initial_config_dict["services"]) == 1
     assert initial_config_dict["services"][0]["name"] == "tcp-health-check"
     assert "--socket-path" in initial_config_dict["services"][0]["check"]["args"]
-    assert socket_path in initial_config_dict["services"][0]["check"]["args"]
+    assert (
+        f"{ConsulConfigBuilder.HYPERVISOR_SOCKET_PREFIX}/{socket_path}"
+        in initial_config_dict["services"][0]["check"]["args"]
+    )
 
     # Reset the mock to track subsequent calls
     write_config.reset_mock()
@@ -389,7 +396,10 @@ def test_socket_config_persists_across_events(
         assert len(post_event_config_dict["services"]) == 1
         assert post_event_config_dict["services"][0]["name"] == "tcp-health-check"
         assert "--socket-path" in post_event_config_dict["services"][0]["check"]["args"]
-        assert socket_path in post_event_config_dict["services"][0]["check"]["args"]
+        assert (
+            f"{ConsulConfigBuilder.HYPERVISOR_SOCKET_PREFIX}/{socket_path}"
+            in post_event_config_dict["services"][0]["check"]["args"]
+        )
 
     # Verify relation data is still accessible
     assert charm.consul_notify.is_ready
@@ -409,7 +419,10 @@ def test_socket_config_persists_across_events(
         assert len(upgrade_config_dict["services"]) == 1
         assert upgrade_config_dict["services"][0]["name"] == "tcp-health-check"
         assert "--socket-path" in upgrade_config_dict["services"][0]["check"]["args"]
-        assert socket_path in upgrade_config_dict["services"][0]["check"]["args"]
+        assert (
+            f"{ConsulConfigBuilder.HYPERVISOR_SOCKET_PREFIX}/{socket_path}"
+            in upgrade_config_dict["services"][0]["check"]["args"]
+        )
 
 
 def test_health_check_disabled_by_config(

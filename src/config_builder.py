@@ -35,6 +35,8 @@ class Ports(BaseModel):
 class ConsulConfigBuilder:
     """Build the configuration file for consul."""
 
+    HYPERVISOR_SOCKET_PREFIX = "hypervisor"
+
     def __init__(
         self,
         bind_address: str | None,
@@ -90,7 +92,9 @@ class ConsulConfigBuilder:
                 args = ["python3", str(self.consul_health_check), *self.healthcheck_endpoints]
             else:
                 args = ["python3", str(self.consul_health_check), *self.consul_servers]
-            args.extend(["--socket-path", self.unix_socket_filepath])
+            args.extend(
+                ["--socket-path", f"{self.HYPERVISOR_SOCKET_PREFIX}/{self.unix_socket_filepath}"]
+            )
             args.extend(["--monitoring-samples", str(self.monitoring_samples)])
 
             config["services"] = [
