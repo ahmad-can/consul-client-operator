@@ -17,8 +17,10 @@ description: |
 
 parts:
   charm:
-    charm-binary-python-packages:
-      - pydantic
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
 
 base: ubuntu@24.04
 platforms:
