@@ -9,7 +9,20 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from tcp_health_check import NetworkStatus, send_nic_down_alert, tcp_check
+from tcp_health_check import (
+    NetworkStatus,
+    read_state,
+    send_nic_down_alert,
+    send_nic_up_alert,
+    tcp_check,
+    write_state,
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_snap_data(tmp_path, monkeypatch):
+    """Keep the default state file out of the real /tmp so tests don't leak into each other."""
+    monkeypatch.setenv("SNAP_DATA", str(tmp_path))
 
 
 class TestNetworkStatus:
@@ -18,6 +31,10 @@ class TestNetworkStatus:
     def test_nic_down_value(self):
         """Test that NIC_DOWN has the correct value."""
         assert NetworkStatus.NIC_DOWN.value == "nic-down"
+
+    def test_nic_up_value(self):
+        """Test that NIC_UP has the correct value."""
+        assert NetworkStatus.NIC_UP.value == "nic-up"
 
 
 class TestSendNicDownAlert:
@@ -280,3 +297,278 @@ class TestTcpCheck:
         # In a real scenario, this would need to be fixed.
         with pytest.raises((ValueError, OSError)):
             tcp_check(servers, "data/socket.sock")
+
+
+class TestSendNicUpAlert:
+    """Test send_nic_up_alert function."""
+
+    @patch("tcp_health_check.socket.socket")
+    @patch("tcp_health_check.time.time")
+    @patch.dict("os.environ", {"SNAP_DATA": "/snap/data"})
+    def test_send_nic_up_alert_success(self, mock_time, mock_socket_class):
+        """A nic-up message is sent and reported as delivered."""
+        mock_time.return_value = 1234567890.123
+        mock_sock = MagicMock()
+        mock_socket_class.return_value.__enter__.return_value = mock_sock
+        mock_sock.recv.return_value = b'{"status": "success"}'
+
+        assert send_nic_up_alert("hypervisor/shutdown.sock") is True
+
+        mock_sock.connect.assert_called_once_with("/snap/data/hypervisor/shutdown.sock")
+        message = json.loads(mock_sock.sendall.call_args[0][0].decode())
+        assert message["version"] == "1.0"
+        assert message["status"] == "nic-up"
+
+    @patch("tcp_health_check.socket.socket")
+    @patch.dict("os.environ", {"SNAP_DATA": "/snap/data"})
+    def test_send_nic_up_alert_socket_error_is_not_delivered(self, mock_socket_class):
+        """A connection failure is reported as not delivered."""
+        mock_sock = MagicMock()
+        mock_socket_class.return_value.__enter__.return_value = mock_sock
+        mock_sock.connect.side_effect = socket.error("Connection refused")
+
+        assert send_nic_up_alert("hypervisor/shutdown.sock") is False
+
+    @patch("tcp_health_check.socket.socket")
+    @patch.dict("os.environ", {"SNAP_DATA": "/snap/data"})
+    def test_send_alert_error_response_is_not_delivered(self, mock_socket_class, caplog):
+        """An error reply (e.g. an older receiver that does not know nic-up) is retried."""
+        mock_sock = MagicMock()
+        mock_socket_class.return_value.__enter__.return_value = mock_sock
+        mock_sock.recv.return_value = b'{"status": "error", "message": "Unknown status"}'
+
+        assert send_nic_up_alert("hypervisor/shutdown.sock") is False
+        assert "Error from server: Unknown status" in caplog.text
+
+    @patch("tcp_health_check.socket.socket")
+    @patch.dict("os.environ", {"SNAP_DATA": "/snap/data"})
+    def test_send_alert_does_not_wait_longer_than_the_check_timeout(self, mock_socket_class):
+        """A busy receiver must not hold the check until Consul kills it."""
+        mock_sock = MagicMock()
+        mock_socket_class.return_value.__enter__.return_value = mock_sock
+        mock_sock.recv.return_value = b'{"status": "success"}'
+
+        send_nic_up_alert("hypervisor/shutdown.sock")
+
+        mock_sock.settimeout.assert_called_once_with(3)
+
+    @patch("tcp_health_check.socket.socket")
+    @patch.dict("os.environ", {"SNAP_DATA": "/snap/data"})
+    def test_send_nic_down_alert_returns_false_on_failure(self, mock_socket_class):
+        """send_nic_down_alert reports delivery failure."""
+        mock_sock = MagicMock()
+        mock_socket_class.return_value.__enter__.return_value = mock_sock
+        mock_sock.connect.side_effect = socket.error("Connection refused")
+
+        assert send_nic_down_alert("hypervisor/shutdown.sock") is False
+
+
+class TestRecovery:
+    """Test that nic-up is sent once after a delivered nic-down."""
+
+    SERVERS = ["10.0.0.1:8301"]
+    SOCKET = "hypervisor/shutdown.sock"
+
+    @staticmethod
+    def _reachable():
+        conn = MagicMock()
+        conn.__enter__ = MagicMock()
+        conn.__exit__ = MagicMock()
+        return conn
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_down_alert", return_value=True)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_nic_up_sent_once_after_nic_down(self, mock_conn, mock_down, mock_up, tmp_path):
+        """Failure -> nic-down; recovery -> nic-up exactly once; later checks send nothing."""
+        mock_up.return_value = True
+        state = str(tmp_path / "state.json")
+
+        mock_conn.side_effect = socket.error("down")
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        mock_down.assert_called_once_with(self.SOCKET)
+        assert read_state(state) == {"failure_count": 0, "alert_sent": True, "success_count": 0}
+
+        mock_conn.side_effect = None
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        mock_up.assert_called_once_with(self.SOCKET)
+        assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        mock_up.assert_called_once_with(self.SOCKET)
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.socket.create_connection")
+    def test_no_nic_up_without_prior_alert(self, mock_conn, mock_up, tmp_path):
+        """A healthy node that never alerted never sends nic-up."""
+        mock_conn.return_value = self._reachable()
+        state = str(tmp_path / "state.json")
+
+        tcp_check(self.SERVERS, self.SOCKET, state_file=state)
+
+        mock_up.assert_not_called()
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_down_alert", return_value=True)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_no_nic_up_below_failure_threshold(self, mock_conn, mock_down, mock_up, tmp_path):
+        """Failures below the threshold send no alert, so recovery sends no nic-up."""
+        state = str(tmp_path / "state.json")
+
+        mock_conn.side_effect = socket.error("down")
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        mock_conn.side_effect = None
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+
+        mock_down.assert_not_called()
+        mock_up.assert_not_called()
+        assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_down_alert", return_value=False)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_undelivered_nic_down_does_not_arm_recovery(
+        self, mock_conn, mock_down, mock_up, tmp_path
+    ):
+        """If nic-down could not be delivered there is nothing to undo."""
+        state = str(tmp_path / "state.json")
+
+        mock_conn.side_effect = socket.error("down")
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        mock_conn.side_effect = None
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+
+        mock_up.assert_not_called()
+        assert read_state(state)["alert_sent"] is False
+
+    @patch("tcp_health_check.send_nic_up_alert", side_effect=[False, True])
+    @patch("tcp_health_check.socket.create_connection")
+    def test_failed_nic_up_is_retried(self, mock_conn, mock_up, tmp_path):
+        """If nic-up cannot be delivered, the flag stays set and the next check retries."""
+        state = str(tmp_path / "state.json")
+        write_state(state, 0, True)
+        mock_conn.return_value = self._reachable()
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        assert read_state(state)["alert_sent"] is True
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        assert read_state(state)["alert_sent"] is False
+        assert mock_up.call_count == 2
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_down_alert", return_value=True)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_repeated_outage_keeps_alert_flag(self, mock_conn, mock_down, mock_up, tmp_path):
+        """A second nic-down during a continuing outage keeps the flag armed."""
+        state = str(tmp_path / "state.json")
+        mock_conn.side_effect = socket.error("down")
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+
+        assert mock_down.call_count == 2
+        mock_up.assert_not_called()
+        assert read_state(state)["alert_sent"] is True
+
+    def test_read_state_old_format_file(self, tmp_path):
+        """A state file written before this change (no alert_sent) still loads."""
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"failure_count": 2}))
+
+        assert read_state(str(state)) == {
+            "failure_count": 2,
+            "alert_sent": False,
+            "success_count": 0,
+        }
+
+
+class TestRecoveryHysteresis:
+    """nic-up needs the same run of consecutive successes that nic-down needs failures."""
+
+    SERVERS = ["10.0.0.1:8301"]
+    SOCKET = "hypervisor/shutdown.sock"
+
+    @staticmethod
+    def _reachable():
+        conn = MagicMock()
+        conn.__enter__ = MagicMock()
+        conn.__exit__ = MagicMock()
+        return conn
+
+    @patch("tcp_health_check.send_nic_up_alert", return_value=True)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_nic_up_waits_for_consecutive_successes(self, mock_conn, mock_up, tmp_path):
+        state = str(tmp_path / "state.json")
+        write_state(state, 0, True)
+        mock_conn.return_value = self._reachable()
+
+        for expected in (1, 2):
+            tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+            mock_up.assert_not_called()
+            assert read_state(state)["success_count"] == expected
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        mock_up.assert_called_once_with(self.SOCKET)
+        assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
+
+    @patch("tcp_health_check.send_nic_up_alert", return_value=True)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_a_failure_restarts_the_run_of_successes(self, mock_conn, mock_up, tmp_path):
+        """A flapping link does not send nic-up on every blip."""
+        state = str(tmp_path / "state.json")
+        write_state(state, 0, True)
+
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        mock_conn.side_effect = socket.error("down")
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        assert read_state(state)["success_count"] == 0
+        assert read_state(state)["alert_sent"] is True
+
+        mock_conn.side_effect = None
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        mock_up.assert_not_called()
+
+    @patch("tcp_health_check.send_nic_up_alert", side_effect=[False, True])
+    @patch("tcp_health_check.socket.create_connection")
+    def test_failed_nic_up_is_retried_on_the_next_check(self, mock_conn, mock_up, tmp_path):
+        state = str(tmp_path / "state.json")
+        write_state(state, 0, True, success_count=2)
+        mock_conn.return_value = self._reachable()
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        assert read_state(state)["alert_sent"] is True
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=3, state_file=state)
+        assert read_state(state)["alert_sent"] is False
+        assert mock_up.call_count == 2
+
+
+class TestStateFile:
+    def test_write_is_atomic_and_leaves_no_temporary_file(self, tmp_path):
+        state = tmp_path / "state.json"
+
+        assert write_state(str(state), 2, True, 1) is True
+
+        assert json.loads(state.read_text()) == {
+            "failure_count": 2,
+            "alert_sent": True,
+            "success_count": 1,
+        }
+        assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+    def test_failed_write_keeps_the_previous_state(self, tmp_path):
+        state = tmp_path / "state.json"
+        write_state(str(state), 0, True)
+
+        with patch("tcp_health_check.json.dump", side_effect=OSError("disk full")):
+            assert write_state(str(state), 1, False) is False
+
+        assert read_state(str(state))["alert_sent"] is True

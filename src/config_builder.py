@@ -4,6 +4,7 @@
 
 """Config builder for Consul."""
 
+import filecmp
 import logging
 import shutil
 from pathlib import Path
@@ -118,9 +119,16 @@ class ConsulConfigBuilder:
         logger.info(f"Creating parent directories for {Path(destination_path)} if does not exist")
         Path(destination_path).parent.mkdir(parents=True, exist_ok=True)
 
-        if not destination_path.exists():
+        # Copy when missing, and also when the packaged script changed so that charm
+        # upgrades roll out new health check logic to nodes that already have a copy.
+        if not destination_path.exists() or not filecmp.cmp(
+            health_check_script_path, destination_path, shallow=False
+        ):
             try:
-                shutil.copy(health_check_script_path, destination_path)
+                # Copy aside and rename: Consul may be running the script at this moment
+                tmp_path = destination_path.with_name(f"{destination_path.name}.tmp")
+                shutil.copy(health_check_script_path, tmp_path)
+                tmp_path.replace(destination_path)
                 logger.info(f"TCP health check script copied to {destination_path}")
             except Exception as e:
                 logger.error(f"Failed to copy TCP health check script: {e}")
