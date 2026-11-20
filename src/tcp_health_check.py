@@ -192,8 +192,17 @@ def _any_server_unreachable(servers: list[str]) -> bool:
     return unreachable
 
 
-def _on_failure(state: dict, socket_path: str | None, monitoring_samples: int) -> dict:
+def _on_failure(
+    state: dict, socket_path: str | None, monitoring_samples: int, state_file: str | None
+) -> dict:
     """Update the failure count and send nic-down once the threshold is reached.
+
+    The ``alert_sent`` flag is persisted *before* the nic-down is sent. Consul kills a
+    check that overruns its timeout, and the probe plus the ack wait can consume the
+    whole budget; if the process died mid-send with the flag still unsaved, the
+    recovery nic-up would be lost and the node would stay stuck. The receiver treats
+    a nic-up with no recorded evacuation as a no-op, so a nic-down that never landed
+    is harmless.
 
     Returns:
         dict: The new state. A failed check also ends any run of successful ones.
@@ -210,11 +219,17 @@ def _on_failure(state: dict, socket_path: str | None, monitoring_samples: int) -
         # The receiver acts on nic-down before replying, so the action may have
         # happened even if the ack timed out. Mark the alert as sent optimistically
         # so a delayed ack can never suppress the recovery nic-up.
-        if not send_nic_down_alert(socket_path):
-            logging.warning("nic-down ack not received (receiver may have acted anyway)")
         alert_sent = True
         # Reset counter after sending alert
         failure_count = 0
+        new_state = {"failure_count": failure_count, "alert_sent": alert_sent, "success_count": 0}
+        # Persist the flag before sending: if Consul kills us during the send/ack wait
+        # the recovery nic-up must survive. Best-effort; a failed write only risks a
+        # lost nic-up, not a duplicate action on the receiver.
+        if state_file and not write_state(state_file, **new_state):
+            logging.error("Failed to persist alert_sent before sending nic-down")
+        if not send_nic_down_alert(socket_path):
+            logging.warning("nic-down ack not received (receiver may have acted anyway)")
 
     return {"failure_count": failure_count, "alert_sent": alert_sent, "success_count": 0}
 
@@ -259,7 +274,8 @@ def tcp_check(
     Sends nic-down after ``monitoring_samples`` consecutive failed checks, and a single
     nic-up after ``monitoring_samples`` consecutive successful checks that follow a
     sent nic-down. The nic-down is treated as sent even if its acknowledgement timed
-    out, because the receiver acts before replying.
+    out, because the receiver acts before replying, and the ``alert_sent`` flag is
+    persisted before the send so a check killed mid-send cannot lose the recovery.
 
     Args:
         servers: List of servers to check in format "host:port"
@@ -276,7 +292,7 @@ def tcp_check(
     state = read_state(state_file)
 
     if _any_server_unreachable(servers):
-        new_state = _on_failure(state, socket_path, monitoring_samples)
+        new_state = _on_failure(state, socket_path, monitoring_samples, state_file)
     else:
         new_state = _on_success(state, socket_path, monitoring_samples)
 

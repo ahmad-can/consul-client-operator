@@ -453,6 +453,51 @@ class TestRecovery:
         mock_up.assert_called_once_with(self.SOCKET)
         assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
 
+    @patch("tcp_health_check.send_nic_down_alert")
+    @patch("tcp_health_check.socket.create_connection")
+    def test_alert_sent_is_persisted_before_nic_down_is_sent(self, mock_conn, mock_down, tmp_path):
+        """The flag must be on disk before the send blocks.
+
+        Consul kills a check that overruns its timeout: the probe can take 2s and
+        the ack wait another 3s, so the process may die mid-send. If alert_sent
+        were only written after the send, the killed check would leave the flag
+        false and the recovery nic-up would never be sent.
+        """
+        state = str(tmp_path / "state.json")
+        mock_conn.side_effect = socket.error("down")
+        seen = {}
+        mock_down.side_effect = lambda _: seen.update(on_disk=read_state(state))
+
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+
+        assert seen["on_disk"] == {"failure_count": 0, "alert_sent": True, "success_count": 0}
+        assert read_state(state) == {"failure_count": 0, "alert_sent": True, "success_count": 0}
+
+    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_down_alert", side_effect=SystemExit)
+    @patch("tcp_health_check.socket.create_connection")
+    def test_check_killed_mid_send_still_sends_nic_up_on_recovery(
+        self, mock_conn, mock_down, mock_up, tmp_path
+    ):
+        """If the check dies during the send, a later nic-up must still go out.
+
+        SystemExit simulates Consul killing the check after the receiver acted on
+        the nic-down but before the sender could record anything after the send.
+        """
+        state = str(tmp_path / "state.json")
+        mock_conn.side_effect = socket.error("down")
+
+        with pytest.raises(SystemExit):
+            tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        assert read_state(state)["alert_sent"] is True
+
+        mock_conn.side_effect = None
+        mock_conn.return_value = self._reachable()
+        tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+
+        mock_up.assert_called_once_with(self.SOCKET)
+        assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
+
     @patch("tcp_health_check.send_nic_up_alert", side_effect=[False, True])
     @patch("tcp_health_check.socket.create_connection")
     def test_failed_nic_up_is_retried(self, mock_conn, mock_up, tmp_path):
