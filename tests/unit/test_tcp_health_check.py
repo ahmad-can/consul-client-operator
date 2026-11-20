@@ -426,23 +426,32 @@ class TestRecovery:
         mock_up.assert_not_called()
         assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
 
-    @patch("tcp_health_check.send_nic_up_alert")
+    @patch("tcp_health_check.send_nic_up_alert", return_value=True)
     @patch("tcp_health_check.send_nic_down_alert", return_value=False)
     @patch("tcp_health_check.socket.create_connection")
-    def test_undelivered_nic_down_does_not_arm_recovery(
+    def test_delayed_nic_down_ack_still_arms_recovery(
         self, mock_conn, mock_down, mock_up, tmp_path
     ):
-        """If nic-down could not be delivered there is nothing to undo."""
+        """A nic-down whose ack timed out still arms the recovery nic-up.
+
+        The receiver stops nova-compute and handles VMs before replying, so the
+        ack can exceed the sender's socket timeout even though the action was
+        taken. If the flag only armed on the ack, the recovery nic-up would be
+        suppressed permanently once the network recovered.
+        """
         state = str(tmp_path / "state.json")
 
         mock_conn.side_effect = socket.error("down")
         tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
+        assert read_state(state)["alert_sent"] is True
+
         mock_conn.side_effect = None
         mock_conn.return_value = self._reachable()
         tcp_check(self.SERVERS, self.SOCKET, monitoring_samples=1, state_file=state)
 
-        mock_up.assert_not_called()
-        assert read_state(state)["alert_sent"] is False
+        mock_down.assert_called_once_with(self.SOCKET)
+        mock_up.assert_called_once_with(self.SOCKET)
+        assert read_state(state) == {"failure_count": 0, "alert_sent": False, "success_count": 0}
 
     @patch("tcp_health_check.send_nic_up_alert", side_effect=[False, True])
     @patch("tcp_health_check.socket.create_connection")

@@ -56,8 +56,8 @@ def write_state(
     Args:
         state_file: Path to the state file.
         failure_count: The failure count to write.
-        alert_sent: Whether a nic-down alert was delivered and not yet cleared by nic-up.
-        success_count: Consecutive successful checks since the nic-down was delivered.
+        alert_sent: Whether a nic-down alert was sent (or attempted) and not yet cleared by nic-up.
+        success_count: Consecutive successful checks since the nic-down was sent.
 
     Returns:
         bool: True if write was successful, False otherwise.
@@ -207,9 +207,12 @@ def _on_failure(state: dict, socket_path: str | None, monitoring_samples: int) -
     elif not socket_path:
         logging.error("Cannot send alert: socket_path is required but was not provided")
     else:
-        if send_nic_down_alert(socket_path):
-            # Remember the alert so a nic-up is sent once the network recovers
-            alert_sent = True
+        # The receiver acts on nic-down before replying, so the action may have
+        # happened even if the ack timed out. Mark the alert as sent optimistically
+        # so a delayed ack can never suppress the recovery nic-up.
+        if not send_nic_down_alert(socket_path):
+            logging.warning("nic-down ack not received (receiver may have acted anyway)")
+        alert_sent = True
         # Reset counter after sending alert
         failure_count = 0
 
@@ -255,7 +258,8 @@ def tcp_check(
 
     Sends nic-down after ``monitoring_samples`` consecutive failed checks, and a single
     nic-up after ``monitoring_samples`` consecutive successful checks that follow a
-    delivered nic-down.
+    sent nic-down. The nic-down is treated as sent even if its acknowledgement timed
+    out, because the receiver acts before replying.
 
     Args:
         servers: List of servers to check in format "host:port"
